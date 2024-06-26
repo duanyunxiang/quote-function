@@ -1,0 +1,10 @@
+# 在项目根目录执行，部署服务至knative集群
+kubectl apply -f knative/kservice.yml
+
+kubectl get ksvc  获取已创建的knative service和url
+url还是 http://quote-function.default.127.0.0.1.sslip.io
+
+# 打开通向集群的通道
+minikube tunnel --profile knative
+
+kubectl delete -f knative/kservice.yml
