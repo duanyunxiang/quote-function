@@ -1,0 +1,121 @@
+# 工作流的名称
+name: Commit Stage
+# 触发时机
+on: push
+
+env:
+  # 使用github容器注册中心
+  REGISTRY: ghcr.io
+  IMAGE_NAME: duanyunxiang/quote-function
+  # 将版本号定义为commit的hash值
+  VERSION: ${{github.sha}}
+
+jobs:
+  # 构建job，build是job的唯一标识符
+  build:
+    name: Build and Test
+    runs-on: ubuntu-22.04
+    permissions:
+      # 检出当前git仓库的权限
+      contents: read
+      # 提交安全事件至github的权限
+      security-events: write
+    steps:
+      - name: "检查源码"
+        uses: actions/checkout@v3
+      - name: "安装JDK"
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: "代码漏洞扫描"
+        uses: anchore/scan-action@v3
+        id: scan
+        with:
+          path: "${{github.workspace}}"
+          # false-扫描失败，还是继续，在github仓库Security区找扫描结果
+          fail-build: false
+          severity-cutoff: high
+          acs-report-enable: true
+      - name: "上传漏洞报告"
+        uses: github/codeql-action/upload-sarif@v3
+        if: success() || failure()
+        with:
+          sarif_file: ${{steps.scan.outputs.sarif}}
+      - name: "构建，单元测试和集成测试"
+        run: |
+          chmod +x gradlew
+          ./gradlew build
+  native:
+    name: Build and Test (Native)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '22.1.0'
+          java-version: '17'
+          components: 'native-image'
+          github-token: ${{secrets.GITHUB_TOKEN}}
+      - name: Build, unit tests and integration tests (native)
+        run: |
+          chmod +x gradlew
+          ./gradlew nativeBuild
+  # 打包job
+  package:
+    name: Package and Publish
+    # 只在master分支上运行该job
+    if: ${{ github.ref == 'refs/heads/master' }}
+    # build job成功时才运行
+    needs: [build, native]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      # 上传镜像到github容器注册中心的权限
+      packages: write
+      security-events: write
+    steps:
+      - name: "检查源码"
+        uses: actions/checkout@v3
+      - name: "安装JDK"
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: "构建镜像"
+        run: |
+          chmod +x gradlew
+          ./gradlew bootBuildImage --imageName ${{env.REGISTRY}}/${{env.IMAGE_NAME}}:${{env.VERSION}}
+      - name: "OCI镜像漏洞扫描"
+        uses: anchore/scan-action@v3
+        id: scan
+        with:
+          image: ${{env.REGISTRY}}/${{env.IMAGE_NAME}}:${{env.VERSION}}
+          fail-build: false
+          severity-cutoff: high
+          acs-report-enable: true
+      - name: "上传漏洞报告"
+        uses: github/codeql-action/upload-sarif@v3
+        if: success() || failure()
+        with:
+          sarif_file: ${{steps.scan.outputs.sarif}}
+      - name: "登录容器注册中心"
+        uses: docker/login-action@v2
+        with:
+          registry: ${{env.REGISTRY}}
+          # 由github actions提供
+          username: ${{github.actor}}
+          password: ${{secrets.GITHUB_TOKEN}}
+      - name : "push镜像"
+        run: docker push ${{env.REGISTRY}}/${{env.IMAGE_NAME}}:${{env.VERSION}}
+      - name: "push镜像(latest)"
+        run: |
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
