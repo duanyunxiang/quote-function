@@ -1,0 +1,10 @@
+pluginManagement {
+    repositories {
+        // 指定插件仓库
+        maven { url 'https://repo.spring.io/milestone' }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'quote-function'
